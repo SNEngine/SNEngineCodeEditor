@@ -1,0 +1,42 @@
+# Python-specific files and folders
+# -------------------------------------------------------------------
+
+# Byte-code files
+*.pyc
+__pycache__/
+
+# Virtual Environments
+# Exclude the environment folder created by 'python -m venv venv'
+venv/
+.venv/
+env/
+.env/
+
+# IDE and Editor Directories
+# Local development environment settings for popular IDEs
+.idea/             # PyCharm / IntelliJ
+.vscode/           # Visual Studio Code
+
+# Build and Distribution files (for PyInstaller/setup tools)
+# -------------------------------------------------------------------
+
+# PyInstaller temporary and output folders
+build/
+dist/
+*.spec
+
+# Test and Coverage files
+.pytest_cache/
+.coverage
+
+# Miscellaneous
+# -------------------------------------------------------------------
+
+# Logs and SQLite databases
+*.log
+*.sqlite
+
+# Temporary data folder created during development/testing
+temp_lang_data/
+
+src/session.json

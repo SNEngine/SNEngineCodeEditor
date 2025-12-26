@@ -1,0 +1,19 @@
+{
+  "ClearBackgroundNodeWorker": "Clear Background",
+  "CompareIntegersNodeWorker": "Compare {a} {type} {b}",
+  "DebugNodeWorker": "Print {message}",
+  "DialogNodeWorker": "{_character} says {_text}",
+  "DialogOnScreenNodeWorker": "Dialog On Screen {_text}",
+  "ErrorNodeWorker": "Error {message}",
+  "ExitNodeWorker": "End",
+  "GroupCallsNodeWorker": "function {_name}",
+  "HideCharacterNodeWorker": "Hide {_character}",
+  "IfNodeWorker": "IF {condition}",
+  "JumpToDialogueNodeWorker": "Jump To {_dialogue}",
+  "PlaySoundNodeWorker": "Play Sound {_sound}",
+  "SetBackgroundNodeWorker": "Show Background {_sprite}",
+  "ShowCharacterNodeWorker": "Show {_character} with emotion {_emotion}",
+  "ShowVariantsNodeWorker": "Show Variants {_variants}",
+  "StartNodeWorker": "Start",
+  "WaitNodeWorker": "Wait {seconds} seconds"
+}
