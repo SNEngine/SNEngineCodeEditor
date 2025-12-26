@@ -20,6 +20,11 @@ def create_main_toolbar(self):
     open_folder_action.triggered.connect(self.open_folder_dialog)
     main_toolbar.addAction(open_folder_action)
 
+    # New File Button
+    new_file_action = QAction(self.icon_yaml, "New File", self)
+    new_file_action.triggered.connect(self.new_file_action)
+    main_toolbar.addAction(new_file_action)
+
     main_toolbar.addSeparator()
 
     # Reload Structure

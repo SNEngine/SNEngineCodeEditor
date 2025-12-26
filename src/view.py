@@ -847,6 +847,66 @@ class SNILEditorWindow(QMainWindow):
             color = QColor(self.STYLES['DarkTheme']['NotificationWarning'])
             self.show_notification("No folder open to reload.", color)
 
+    def new_file_action(self):
+        """Create a new file. If in directory mode, save to the current directory. If in single file mode, prompt for location."""
+        import os
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        from models import SNILTab
+
+        # Check if we're in directory mode (root_path is set) or single file mode
+        if self.root_path and os.path.isdir(self.root_path):
+            # We're in directory mode, create file in the root directory
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Create New SNIL File",
+                self.root_path,  # Start in the current root directory
+                "SNIL Files (*.snil);;All Files (*)"
+            )
+
+            if file_path:
+                # If the file doesn't end with .snil, add it
+                if not file_path.lower().endswith('.snil'):
+                    file_path += '.snil'
+
+                # Create the new file with empty content if it doesn't exist
+                if not os.path.exists(file_path):
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write("")
+
+                # Load the new file into a tab
+                self.load_file(file_path)
+
+                color = QColor(self.STYLES['DarkTheme']['NotificationSuccess'])
+                self.show_notification(f"New file created: {os.path.basename(file_path)}", color)
+        else:
+            # We're in single file mode or no directory is open
+            # Prompt user for location to save the new file
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Create New SNIL File",
+                self._last_open_dir if self._last_open_dir and os.path.isdir(self._last_open_dir) else os.path.expanduser("~"),
+                "SNIL Files (*.snil);;All Files (*)"
+            )
+
+            if file_path:
+                # If the file doesn't end with .snil, add it
+                if not file_path.lower().endswith('.snil'):
+                    file_path += '.snil'
+
+                # Create the new file with empty content if it doesn't exist
+                if not os.path.exists(file_path):
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write("")
+
+                # Load the new file into a tab
+                self.load_file(file_path)
+
+                # Update the last open directory for future use
+                self._last_open_dir = os.path.dirname(file_path)
+
+                color = QColor(self.STYLES['DarkTheme']['NotificationSuccess'])
+                self.show_notification(f"New file created: {os.path.basename(file_path)}", color)
+
     def handle_undo(self):
         from views.shortcuts import handle_undo as _undo
         return _undo(self)
