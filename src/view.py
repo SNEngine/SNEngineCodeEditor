@@ -796,7 +796,7 @@ class SNILEditorWindow(QMainWindow):
             self.script_graph_window.activateWindow()
         else:
             # Create new window
-            from views.script_graph import ScriptGraphWindow
+            from views.graph.script_graph import ScriptGraphWindow
             self.script_graph_window = ScriptGraphWindow(self)
 
             # Parse current content and show in the window
