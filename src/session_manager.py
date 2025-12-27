@@ -52,7 +52,9 @@ class SessionManager:
             'open_tabs': [], # Always initialize as empty list
             'foldouts': self.parent_window._foldouts,
             'last_open_dir': self.parent_window._last_open_dir,
-            'font_size': self.parent_window._current_font_size
+            'font_size': self.parent_window._current_font_size,
+            'dialog_cache': getattr(self.parent_window, 'dialog_cache', []),  # Save dialog cache if it exists
+            'character_cache': getattr(self.parent_window, 'character_cache', [])  # Save character cache if it exists
         }
 
         # If there's no root_path, we still want to save last_open_dir
@@ -254,7 +256,27 @@ class SessionManager:
         self.parent_window.update_status_bar()
         self.parent_window.update_undo_redo_ui()
 
-        # 8. Restore font size
+        # 8. Restore dialog cache if it was saved in the session
+        dialog_cache = session_data.get('dialog_cache', [])
+        if dialog_cache:
+            self.parent_window.dialog_cache = dialog_cache
+            print(f"Restored {len(dialog_cache)} dialog names from session:")
+            for i, dialog_name in enumerate(dialog_cache, 1):
+                print(f"  {i}. {dialog_name}")
+
+        # 9. Restore character cache if it was saved in the session
+        character_cache = session_data.get('character_cache', [])
+        if character_cache:
+            self.parent_window.character_cache = character_cache
+            print(f"Restored {len(character_cache)} character names from session:")
+            for i, char_name in enumerate(character_cache, 1):
+                print(f"  {i}. {char_name}")
+
+        # 10. Start watching dialogues if root_path exists
+        if self.parent_window.root_path:
+            self.parent_window.start_watching_dialogues(self.parent_window.root_path)
+
+        # 11. Restore font size
         # Use settings manager value if available, otherwise use session value
         if hasattr(self.parent_window, 'settings_manager') and self.parent_window.settings_manager:
             # Settings manager has the current user preference

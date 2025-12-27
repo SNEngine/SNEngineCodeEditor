@@ -218,6 +218,26 @@ class SNILEditorWindow(QMainWindow):
 
         self.settings_manager = SettingsManager()
 
+        # Initialize file system watcher for dialog files
+        self.dialogue_watcher = None
+        self.dialogue_watch_path = None
+
+        # Initialize timer for delayed rescan to avoid multiple rapid scans
+        self.rescan_timer = QTimer()
+        self.rescan_timer.setSingleShot(True)
+        self.rescan_timer.timeout.connect(self.rescan_dialogues)
+
+        # Initialize signal object for rescan requests from other threads
+        from PyQt5.QtCore import QObject, pyqtSignal
+        class RescanSignalObject(QObject):
+            rescan_signal = pyqtSignal()
+
+        self.rescan_signal_obj = RescanSignalObject()
+        self.rescan_signal_obj.rescan_signal.connect(self._schedule_rescan)
+
+        # Load SNIL syntax commands once at startup
+        self.snil_commands = self._load_snil_syntax_commands()
+
         self.init_ui()
         self.update_status_bar()
 
@@ -256,6 +276,9 @@ class SNILEditorWindow(QMainWindow):
             elif reply == QMessageBox.Cancel:
                 event.ignore() # Cancel close
                 return
+
+        # Stop the file watcher before closing
+        self.stop_watching_dialogues()
 
         # If closing is allowed (no unsaved changes or user pressed Discard/Save)
         self.session_manager.save_session() # Save session state
@@ -531,7 +554,191 @@ class SNILEditorWindow(QMainWindow):
             self.root_path = folder_path # Store the root path
             self.reload_structure(folder_path)
 
+    def open_project_dialog(self):
+        """Opens a dialog for selecting a project folder and scans for dialog files."""
+        initial_dir = self._last_open_dir if self._last_open_dir and os.path.isdir(self._last_open_dir) else os.path.expanduser("~")
+        folder_path = QFileDialog.getExistingDirectory(self, "Select Project Folder", initial_dir)
 
+        if folder_path:
+            self._last_open_dir = folder_path
+            self.root_path = folder_path # Store the root path
+
+            # Scan for dialog files in the project
+            self.scan_dialog_files(folder_path)
+
+            # Start watching the dialogues directory for changes
+            self.start_watching_dialogues(folder_path)
+
+            self.reload_structure(folder_path)
+
+    def scan_dialog_files(self, project_path: str):
+        """Scan the project for dialog files and cache their names."""
+        # Initialize dialog cache
+        self.dialog_cache = []
+
+        # Look for the dialogues folder in the expected location
+        dialogues_path = os.path.join(project_path, "Assets", "SNEngine", "Source", "SNEngine", "Resources", "Dialogues")
+
+        if os.path.exists(dialogues_path):
+            # Scan for .snil and .asset files in the dialogues directory
+            for root, dirs, files in os.walk(dialogues_path):
+                for file in files:
+                    if file.lower().endswith(('.snil', '.asset')):
+                        file_path = os.path.join(root, file)
+                        # Extract dialog names from the file
+                        dialog_names = self.extract_dialog_names_from_file(file_path)
+                        self.dialog_cache.extend(dialog_names)
+        else:
+            # If the specific path doesn't exist, scan the entire project for .snil and .asset files
+            for root, dirs, files in os.walk(project_path):
+                for file in files:
+                    if file.lower().endswith(('.snil', '.asset')):
+                        file_path = os.path.join(root, file)
+                        # Extract dialog names from the file
+                        dialog_names = self.extract_dialog_names_from_file(file_path)
+                        self.dialog_cache.extend(dialog_names)
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_dialogs = []
+        for dialog in self.dialog_cache:
+            if dialog not in seen:
+                seen.add(dialog)
+                unique_dialogs.append(dialog)
+
+        self.dialog_cache = unique_dialogs
+
+        # Print the found dialog names for debugging
+        print(f"Found {len(self.dialog_cache)} dialog names in project:")
+        for i, dialog_name in enumerate(self.dialog_cache, 1):
+            print(f"  {i}. {dialog_name}")
+
+        # Also scan for characters
+        self.scan_character_files(project_path)
+
+    def scan_character_files(self, project_path: str):
+        """Scan the project for character files and cache their names."""
+        # Initialize character cache
+        self.character_cache = []
+
+        # Look for the characters folder in the expected location
+        characters_path = os.path.join(project_path, "Assets", "SNEngine", "Source", "SNEngine", "Resources", "Characters")
+
+        if os.path.exists(characters_path):
+            # Scan for character files in the characters directory
+            for root, dirs, files in os.walk(characters_path):
+                for file in files:
+                    if file.lower().endswith('.asset'):
+                        file_path = os.path.join(root, file)
+                        # Extract character name from the file content
+                        char_name = self._extract_character_name_from_file(file_path)
+                        if char_name and char_name not in self.character_cache:
+                            self.character_cache.append(char_name)
+        else:
+            # If the specific path doesn't exist, scan the entire project for character-related files
+            for root, dirs, files in os.walk(project_path):
+                for file in files:
+                    # Look for asset files that might contain character information
+                    if file.lower().endswith('.asset'):
+                        # Check if the file path contains "character" or similar
+                        if 'character' in root.lower() or 'characters' in root.lower():
+                            file_path = os.path.join(root, file)
+                            # Extract character name from the file content
+                            char_name = self._extract_character_name_from_file(file_path)
+                            if char_name and char_name not in self.character_cache:
+                                self.character_cache.append(char_name)
+
+        # Print the found character names for debugging
+        print(f"Found {len(self.character_cache)} character names in project:")
+        for i, char_name in enumerate(self.character_cache, 1):
+            print(f"  {i}. {char_name}")
+
+    def _extract_character_name_from_file(self, file_path: str) -> str:
+        """Extract character name from a Unity asset file."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Look for the _name field in the asset file
+            import re
+            # Pattern to match '_name: <character_name>' (case-sensitive as it appears in Unity assets)
+            pattern = r'^\s*_name:\s*(.+)$'
+
+            for line in content.splitlines():
+                match = re.match(pattern, line, re.MULTILINE)
+                if match:
+                    char_name = match.group(1).strip()
+                    # Remove quotes if present
+                    char_name = char_name.strip('"\'')
+                    if char_name:
+                        return char_name
+        except Exception as e:
+            print(f"Error reading character file {file_path}: {e}")
+
+        return None
+
+
+    def extract_dialog_names_from_file(self, file_path: str) -> list:
+        """Extract dialog names from a SNIL or Unity asset file."""
+        dialog_names = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Check if it's a Unity asset file (contains YAML Unity format)
+            if "--- !u!" in content and "m_Name:" in content:
+                # For Unity asset files, look for the main dialogue object
+                # The main dialogue object typically has a specific script GUID and is the main asset object
+                lines = content.splitlines()
+
+                # Look for the main asset object (has &11400000 or similar reference)
+                # The main dialogue object is the one that has the 'nodes:' field after m_Name
+                for i, line in enumerate(lines):
+                    if "--- !u!114 &" in line and "MonoBehaviour:" in lines[i+1] if i+1 < len(lines) else False:
+                        # This looks like a MonoBehaviour object, look for m_Name and nodes: in the next few lines
+                        m_name_line = -1
+                        has_nodes_field = False
+                        name_value = ""
+
+                        for j in range(i+1, min(i+30, len(lines))):
+                            if "m_Name:" in lines[j]:
+                                match = re.search(r'm_Name:\s*(.+)', lines[j])
+                                if match:
+                                    name_value = match.group(1).strip()
+                                    m_name_line = j
+                            elif "nodes:" in lines[j]:
+                                has_nodes_field = True
+                                # This confirms it's the main dialogue object
+                                break
+                            # Stop if we encounter another object
+                            elif "--- !u!" in lines[j] and j > i:
+                                break
+
+                        # If we found both m_Name and nodes field, this is the main dialogue object
+                        if m_name_line != -1 and has_nodes_field:
+                            # Remove quotes if present
+                            dialog_name = name_value.strip('"\'')
+                            # Only add if it's not an empty name
+                            if dialog_name:
+                                dialog_names.append(dialog_name)
+                            break  # Only add the main dialogue name, not other objects
+            else:
+                # For SNIL files, look for 'name: <dialogue_name>' patterns
+                # Pattern to match 'name: <dialogue_name>' (case-insensitive)
+                pattern = r'^\s*name\s*:\s*(.+)$'
+
+                for line_num, line in enumerate(content.splitlines(), 1):
+                    match = re.match(pattern, line, re.IGNORECASE)
+                    if match:
+                        dialog_name = match.group(1).strip()
+                        if dialog_name:  # Only add non-empty dialog names
+                            dialog_names.append(dialog_name)
+        except Exception as e:
+            print(f"Error reading file {file_path}: {e}")
+
+        return dialog_names
 
 
     def reload_structure(self, folder_path: str):
@@ -549,6 +756,12 @@ class SNILEditorWindow(QMainWindow):
                     self.save_file_action(tab)
             elif reply == QMessageBox.Cancel:
                 return
+
+        # Hide autocomplete popup if it's visible
+        if hasattr(self, 'text_edit') and self.text_edit and hasattr(self.text_edit, 'autocomplete_popup'):
+            if self.text_edit.autocomplete_popup and self.text_edit.autocomplete_popup.isVisible():
+                self.text_edit.autocomplete_popup.hide_popup()
+                self.text_edit.is_autocomplete_active = False
 
         # Clear open tabs (always when structure is reloaded)
         self.open_tabs.clear()
@@ -1119,3 +1332,131 @@ class SNILEditorWindow(QMainWindow):
         menu.addAction(select_all_action)
 
         menu.exec_(self.text_edit.mapToGlobal(pos))
+
+    def start_watching_dialogues(self, project_path: str):
+        """Start watching the dialogues and characters directories for file changes."""
+        try:
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
+
+            # Define the event handler
+            class DialogueFileHandler(FileSystemEventHandler):
+                def __init__(self, parent):
+                    super().__init__()
+                    self.parent = parent
+
+                def on_modified(self, event):
+                    if not event.is_directory and self._is_dialogue_or_character_file(event.src_path):
+                        print(f"Dialogue/Character file modified: {event.src_path}")
+                        # Emit signal to trigger rescan in the GUI thread
+                        self.parent.rescan_signal_obj.rescan_signal.emit()
+
+                def on_created(self, event):
+                    if not event.is_directory and self._is_dialogue_or_character_file(event.src_path):
+                        print(f"Dialogue/Character file created: {event.src_path}")
+                        # Emit signal to trigger rescan in the GUI thread
+                        self.parent.rescan_signal_obj.rescan_signal.emit()
+
+                def on_deleted(self, event):
+                    if not event.is_directory and self._is_dialogue_or_character_file(event.src_path):
+                        print(f"Dialogue/Character file deleted: {event.src_path}")
+                        # Emit signal to trigger rescan in the GUI thread
+                        self.parent.rescan_signal_obj.rescan_signal.emit()
+
+                def on_moved(self, event):
+                    # Check if the moved file is a dialogue or character file
+                    if self._is_dialogue_or_character_file(event.src_path) or self._is_dialogue_or_character_file(event.dest_path):
+                        print(f"Dialogue/Character file moved: {event.src_path} -> {event.dest_path}")
+                        # Emit signal to trigger rescan in the GUI thread
+                        self.parent.rescan_signal_obj.rescan_signal.emit()
+
+                def _is_dialogue_or_character_file(self, file_path):
+                    """Check if the file is a dialogue or character file (.snil or .asset)"""
+                    return file_path.lower().endswith(('.snil', '.asset'))
+
+            # Stop any existing watcher
+            self.stop_watching_dialogues()
+
+            # Look for the dialogues folder in the expected location
+            dialogues_path = os.path.join(project_path, "Assets", "SNEngine", "Source", "SNEngine", "Resources", "Dialogues")
+            characters_path = os.path.join(project_path, "Assets", "SNEngine", "Source", "SNEngine", "Resources", "Characters")
+
+            # Create and start the observer
+            self.dialogue_watcher = Observer()
+            event_handler = DialogueFileHandler(self)
+
+            # Watch both dialogues and characters directories
+            if os.path.exists(dialogues_path):
+                self.dialogue_watcher.schedule(event_handler, dialogues_path, recursive=True)
+                print(f"Started watching dialogues directory: {dialogues_path}")
+
+            if os.path.exists(characters_path):
+                self.dialogue_watcher.schedule(event_handler, characters_path, recursive=True)
+                print(f"Started watching characters directory: {characters_path}")
+
+            # If neither specific path exists, watch the entire project for .snil and .asset files
+            if not os.path.exists(dialogues_path) and not os.path.exists(characters_path):
+                self.dialogue_watcher.schedule(event_handler, project_path, recursive=True)
+                print(f"Started watching project directory for dialogue/character files: {project_path}")
+
+            self.dialogue_watcher.start()
+            # Store both paths for stopping
+            self.dialogue_watch_path = [dialogues_path, characters_path] if os.path.exists(dialogues_path) or os.path.exists(characters_path) else project_path
+
+        except ImportError:
+            print("watchdog library not available. File system watching disabled.")
+            print("To enable file watching, install watchdog: pip install watchdog")
+        except Exception as e:
+            print(f"Error starting dialogue/character file watcher: {e}")
+
+    def stop_watching_dialogues(self):
+        """Stop watching the dialogues directory."""
+        if self.dialogue_watcher:
+            try:
+                self.dialogue_watcher.stop()
+                self.dialogue_watcher.join()
+                if isinstance(self.dialogue_watch_path, list):
+                    for path in self.dialogue_watch_path:
+                        if os.path.exists(path):
+                            print(f"Stopped watching directory: {path}")
+                else:
+                    print(f"Stopped watching directory: {self.dialogue_watch_path}")
+            except Exception as e:
+                print(f"Error stopping dialogue file watcher: {e}")
+            finally:
+                self.dialogue_watcher = None
+                self.dialogue_watch_path = None
+
+    def _schedule_rescan(self):
+        """Schedule a rescan to avoid multiple rapid scans."""
+        # Restart the timer to delay the rescan by 500ms
+        self.rescan_timer.stop()
+        self.rescan_timer.start(500)
+
+    def _load_snil_syntax_commands(self):
+        """Load SNIL syntax commands from snil_syntax.json."""
+        import json
+        import os
+
+        commands = []
+        try:
+            syntax_file_path = os.path.join(os.path.dirname(__file__), 'snil_syntax.json')
+            if os.path.exists(syntax_file_path):
+                with open(syntax_file_path, 'r', encoding='utf-8') as f:
+                    syntax_data = json.load(f)
+
+                # Extract command names from the syntax data
+                for key, value in syntax_data.items():
+                    # Add the command text (value) to the commands list
+                    commands.append(value)
+        except Exception as e:
+            print(f"Error loading SNIL syntax commands: {e}")
+
+        return commands
+
+    def rescan_dialogues(self):
+        """Rescan dialogue files and update cache."""
+        if self.root_path:
+            print("Rescanning dialogue files...")
+            self.scan_dialog_files(self.root_path)
+            print("Dialogue files rescanned and cache updated.")

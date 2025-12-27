@@ -20,6 +20,11 @@ def create_main_toolbar(self):
     open_folder_action.triggered.connect(self.open_folder_dialog)
     main_toolbar.addAction(open_folder_action)
 
+    # --- OPEN PROJECT BUTTON ---
+    open_project_action = QAction(self.icon_folder, "Open Project", self)
+    open_project_action.triggered.connect(self.open_project_dialog)
+    main_toolbar.addAction(open_project_action)
+
     # New File Button
     new_file_action = QAction(self.icon_yaml, "New File", self)
     new_file_action.triggered.connect(self.new_file_action)

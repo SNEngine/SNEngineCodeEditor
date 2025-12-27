@@ -41,6 +41,9 @@ def create_editor_area(self) -> QWidget:
     self.text_edit.update_line_numbers_visibility()
     self.text_edit.setPlainText(self.current_tab.snil_text if self.current_tab else "")
     self.text_edit.textChanged.connect(self.handle_text_change)
+
+    # Setup autocomplete functionality
+    self.text_edit.setup_autocomplete(self)
     
     self.highlighter = None
     try:

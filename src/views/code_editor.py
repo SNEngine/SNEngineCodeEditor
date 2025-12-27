@@ -3,7 +3,7 @@ Custom QPlainTextEdit with line numbers and particle effects
 Based on PyQt5 example for creating a text editor with line numbers
 """
 from PyQt5.QtWidgets import QWidget, QPlainTextEdit, QFrame, QLabel, QScrollBar
-from PyQt5.QtCore import Qt, QRect, pyqtProperty
+from PyQt5.QtCore import Qt, QRect, pyqtProperty, QTimer
 import re
 from PyQt5.QtGui import QPainter, QColor, QTextFormat, QFontMetrics, QTextCursor
 from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
@@ -97,6 +97,18 @@ class CodeEditor(QPlainTextEdit):
         self.pulse_timer.timeout.connect(self._update_pulse)
         self._pulse_value = 0.0  # Current pulse value (0.0 to 1.0)
         self._pulse_direction = 0.02  # Pulse increment/decrement value
+
+        # Autocomplete functionality for Jump To and Characters
+        self.autocomplete_popup = None
+        self.autocomplete_timer = QTimer()
+        self.autocomplete_timer.setSingleShot(True)
+        self.autocomplete_timer.timeout.connect(self._show_autocomplete)
+        self.jump_to_prefix = "Jump To "
+        self.character_prefix = ""  # Empty prefix - will trigger on any character input
+        self.is_autocomplete_active = False
+        self.parent_window = None  # Will be set by the main window
+        self.last_char_pressed = None
+        self.last_cursor_pos = -1
 
         # Connect signals - correct PyQt5 signals (after initialization)
         self.blockCountChanged.connect(self.update_line_number_area_width)
@@ -543,6 +555,158 @@ class CodeEditor(QPlainTextEdit):
         """Cleanup when the CodeEditor is destroyed"""
         if self.pulse_timer:
             self.pulse_timer.stop()
+        if self.autocomplete_timer:
+            self.autocomplete_timer.stop()
+
+    def setup_autocomplete(self, parent_window):
+        """Setup autocomplete functionality with parent window reference."""
+        from .autocomplete_popup import AutocompletePopup
+        self.parent_window = parent_window
+        self.autocomplete_popup = AutocompletePopup(parent=self, styles=self.styles)
+        self.autocomplete_popup.item_selected.connect(self._insert_autocomplete_item)
+
+    def _show_autocomplete(self):
+        """Show autocomplete popup if we're in a Jump To context or typing character names."""
+        if not self.parent_window:
+            return
+
+        # Get current cursor position and line
+        cursor = self.textCursor()
+        current_line = cursor.block().text()
+        cursor_pos = cursor.positionInBlock()
+
+        # Check if we're typing after "Jump To "
+        prefix = current_line[:cursor_pos]
+        if prefix.lower().endswith(self.jump_to_prefix.lower()):
+            # Show autocomplete with cached dialog names
+            dialog_names = getattr(self.parent_window, 'dialog_cache', [])
+            if dialog_names:
+                self.autocomplete_popup.update_items(dialog_names)
+                # Position the popup near the cursor
+                cursor_rect = self.cursorRect()
+                popup_pos = self.mapToGlobal(cursor_rect.bottomLeft())
+                self.autocomplete_popup.show_popup(popup_pos)
+                self.is_autocomplete_active = True
+        else:
+            # Check if we're typing a character name or SNIL command
+            if cursor_pos > 0 and cursor_pos <= len(current_line):
+                # Get the word being typed (from the last space or beginning of line)
+                start_pos = 0
+                for i in range(cursor_pos - 1, -1, -1):
+                    if current_line[i] in [' ', ':', '\t', '\n', '\r']:
+                        start_pos = i + 1
+                        break
+
+                current_word = current_line[start_pos:cursor_pos]
+
+                # Check if the current word starts with a letter
+                if current_word and current_word[0].isalpha() and len(current_word) >= 2:
+                    # Check if we're on an empty line (only whitespace before current word)
+                    line_before_cursor = current_line[:start_pos].strip()
+                    is_empty_line = len(line_before_cursor) == 0
+
+                    # First, check for SNIL commands on empty lines
+                    if is_empty_line:
+                        snil_commands = getattr(self.parent_window, 'snil_commands', [])
+                        if snil_commands:
+                            # Filter commands that start with the current word (case-insensitive)
+                            filtered_commands = [cmd for cmd in snil_commands if cmd.lower().startswith(current_word.lower())]
+                            if filtered_commands:
+                                self.autocomplete_popup.update_items(filtered_commands)
+                                # Position the popup near the cursor
+                                cursor_rect = self.cursorRect()
+                                popup_pos = self.mapToGlobal(cursor_rect.bottomLeft())
+                                self.autocomplete_popup.show_popup(popup_pos)
+                                self.is_autocomplete_active = True
+
+                    # Always check for character names regardless of line content
+                    # Get character names that start with the current word
+                    char_names = getattr(self.parent_window, 'character_cache', [])
+                    if char_names:
+                        # Filter characters that start with the current word (case-insensitive)
+                        filtered_chars = [name for name in char_names if name.lower().startswith(current_word.lower())]
+                        if filtered_chars:
+                            # If SNIL commands were already added, add character names to them
+                            if self.is_autocomplete_active:
+                                # Get current items and add character names
+                                current_items = [self.autocomplete_popup.item(i).text() for i in range(self.autocomplete_popup.count())]
+                                all_items = current_items + filtered_chars
+                                self.autocomplete_popup.update_items(all_items)
+                            else:
+                                # No SNIL commands found, just show character names
+                                self.autocomplete_popup.update_items(filtered_chars)
+                                # Position the popup near the cursor
+                                cursor_rect = self.cursorRect()
+                                popup_pos = self.mapToGlobal(cursor_rect.bottomLeft())
+                                self.autocomplete_popup.show_popup(popup_pos)
+                                self.is_autocomplete_active = True
+
+    def _insert_autocomplete_item(self, item_text):
+        """Insert the selected autocomplete item into the text."""
+        if self.is_autocomplete_active:
+            cursor = self.textCursor()
+            current_line = cursor.block().text()
+            cursor_pos = cursor.positionInBlock()
+
+            # Find the position where "Jump To " ends (for dialog autocompletion)
+            prefix_pos = current_line.lower().rfind(self.jump_to_prefix.lower())
+            if prefix_pos != -1:
+                # This is a "Jump To" autocompletion
+                # Move cursor to end of current line after "Jump To "
+                cursor.movePosition(QTextCursor.EndOfLine)
+                # Select from the end of "Jump To " to current cursor position
+                start_pos = cursor.block().position() + prefix_pos + len(self.jump_to_prefix)
+                cursor.setPosition(start_pos, QTextCursor.KeepAnchor)
+                # Replace the selected text with the chosen item
+                cursor.insertText(item_text)
+            else:
+                # This is a character name autocompletion
+                # Find the start of the word being typed
+                start_pos = 0
+                for i in range(cursor_pos - 1, -1, -1):
+                    if current_line[i] in [' ', ':', '\t', '\n', '\r']:
+                        start_pos = i + 1
+                        break
+
+                # Replace the typed portion with the full character name
+                word_start = cursor.block().position() + start_pos
+                cursor.setPosition(word_start, QTextCursor.MoveAnchor)
+                cursor.setPosition(word_start + (cursor_pos - start_pos), QTextCursor.KeepAnchor)
+                cursor.insertText(item_text)
+
+            self.is_autocomplete_active = False
+            self.autocomplete_popup.hide_popup()
+
+    def keyPressEvent(self, event):
+        """Handle key press events for autocomplete functionality."""
+        # If autocomplete popup is visible, handle navigation keys
+        if self.is_autocomplete_active and self.autocomplete_popup and self.autocomplete_popup.isVisible():
+            if event.key() in [Qt.Key_Up, Qt.Key_Down, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Escape]:
+                self.autocomplete_popup.keyPressEvent(event)
+                return
+            elif event.key() not in [Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_Meta]:
+                # If user starts typing while popup is visible, hide it
+                self.autocomplete_popup.hide_popup()
+                self.is_autocomplete_active = False
+
+        # Check if we're typing to trigger autocomplete
+        if event.key() not in [Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_Meta]:
+            # Determine the appropriate delay based on context
+            # For character names, use 200ms delay; for Jump To, use 300ms delay
+            current_line = self.textCursor().block().text()
+            cursor_pos = self.textCursor().positionInBlock()
+            prefix = current_line[:cursor_pos]
+
+            if prefix.lower().endswith(self.jump_to_prefix.lower()):
+                delay = 300  # 300ms delay for Jump To
+            else:
+                delay = 200  # 200ms delay for character names
+
+            # Start the autocomplete timer when typing
+            self.autocomplete_timer.stop()
+            self.autocomplete_timer.start(delay)
+
+        super().keyPressEvent(event)
 
     def update_particle_colors(self, styles):
         """Update particle colors from new styles"""
