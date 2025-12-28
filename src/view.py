@@ -23,6 +23,9 @@ from PyQt5.QtWidgets import QScrollArea
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtWidgets import QMenu
 from PyQt5.QtWidgets import QComboBox
+from PyQt5.QtWidgets import QTreeWidget
+from PyQt5.QtWidgets import QTreeWidgetItem
+from PyQt5.QtWidgets import QDialogButtonBox
 
 from PyQt5.QtGui import QIcon
 from PyQt5.QtGui import QFont
@@ -163,8 +166,10 @@ class SNILEditorWindow(QMainWindow):
         self.CSS_STYLES = self._generate_css(self.STYLES)
 
         self.setWindowTitle("SNIL Editor")
-        self.setGeometry(100, 100, 1200, 800)
         self.setStyleSheet(self.CSS_STYLES) # Apply generated styles
+
+        # Restore window geometry from settings or center on screen
+        self._restore_window_geometry()
 
         # --- Icons Initialization ---
         folder_icon_color = self.STYLES['DarkTheme'].get('FolderIconColor', '#E06C75')
@@ -248,6 +253,9 @@ class SNILEditorWindow(QMainWindow):
         self.auto_save_timer = QTimer(self)
         self.auto_save_timer.timeout.connect(self.perform_auto_save)
         self._setup_auto_save_timer()
+
+        # Initialize window geometry settings
+        self._init_window_geometry()
 
     def closeEvent(self, event):
         """
@@ -374,8 +382,8 @@ class SNILEditorWindow(QMainWindow):
                 'EditorBackground': "#1F1F1F", 'BorderColor': "#3A3A3A", 'HighlightColor': "#C84B31",
                 'HoverColor': "#3A3A3A", 'FilePanelBackground': "#181818", 'FilePanelHover': "#2D2D2D",
                 'FolderColor': "#E06C75", 'StatusDefault': "#999999", 'NotificationSuccess': "#6BA878",
-                'NotificationError': "#D9685A",
-                'NotificationWarning': "#E8C56B",
+                'NotificationError': "#D9685A", 'NotificationWarning': "#E8C56B",
+                'NotificationTextColor': "#1A1A1A",  # Color for notification text
                 'FolderIconColor': "#E06C75",  # Color for the folder icon
                 'YamlFileIconColor': "#CCCCCC"  # Color for YAML file icon
             }
@@ -547,19 +555,73 @@ class SNILEditorWindow(QMainWindow):
     def open_folder_dialog(self):
         """Opens a dialog for selecting a root folder."""
         initial_dir = self._last_open_dir if self._last_open_dir and os.path.isdir(self._last_open_dir) else os.path.expanduser("~")
+
+        # First, try to find a directory with .snil files as the initial directory
+        if not self._has_snil_files_recursive(initial_dir):
+            # If the default directory doesn't have .snil files, try to find one
+            initial_dir = self._find_snil_folder(initial_dir)
+
         folder_path = QFileDialog.getExistingDirectory(self, "Select Root Folder", initial_dir)
 
         if folder_path:
+            # Check if the selected folder contains .snil files
+            if not self._has_snil_files_recursive(folder_path):
+                from PyQt5.QtWidgets import QMessageBox
+                reply = QMessageBox.question(self, "Folder without .snil files",
+                    f"The selected folder does not contain any .snil files.\nDo you still want to open it?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if reply == QMessageBox.No:
+                    return
+
             self._last_open_dir = folder_path
             self.root_path = folder_path # Store the root path
             self.reload_structure(folder_path)
 
+    def _has_snil_files_recursive(self, folder_path):
+        """Check if a folder or any of its subfolders contains .snil files."""
+        return self.file_service.has_snil_files_recursive(folder_path)
+
+
+    def _find_snil_folder(self, start_dir):
+        """Find a folder containing .snil files starting from start_dir."""
+        # First check the start directory and its subdirectories
+        if self._has_snil_files_recursive(start_dir):
+            return start_dir
+
+        # Search in parent directories up to a reasonable depth
+        current_dir = start_dir
+        for _ in range(3):  # Limit search to 3 levels up to prevent long searches
+            parent_dir = os.path.dirname(current_dir)
+            if parent_dir == current_dir:  # Reached root
+                break
+            if self._has_snil_files_recursive(parent_dir):
+                return parent_dir
+            current_dir = parent_dir
+
+        # If nothing found, return the original start_dir
+        return start_dir
+
     def open_project_dialog(self):
         """Opens a dialog for selecting a project folder and scans for dialog files."""
         initial_dir = self._last_open_dir if self._last_open_dir and os.path.isdir(self._last_open_dir) else os.path.expanduser("~")
+
+        # First, try to find a directory with .snil files as the initial directory
+        if not self._has_snil_files_recursive(initial_dir):
+            # If the default directory doesn't have .snil files, try to find one
+            initial_dir = self._find_snil_folder(initial_dir)
+
         folder_path = QFileDialog.getExistingDirectory(self, "Select Project Folder", initial_dir)
 
         if folder_path:
+            # Check if the selected folder contains .snil files
+            if not self._has_snil_files_recursive(folder_path):
+                from PyQt5.QtWidgets import QMessageBox
+                reply = QMessageBox.question(self, "Folder without .snil files",
+                    f"The selected folder does not contain any .snil files.\nDo you still want to open it?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if reply == QMessageBox.No:
+                    return
+
             self._last_open_dir = folder_path
             self.root_path = folder_path # Store the root path
 
@@ -777,6 +839,10 @@ class SNILEditorWindow(QMainWindow):
         # Load the structure from the selected folder
         self.temp_structure = self.file_service.get_file_structure_from_path(folder_path)
         self.root_path = self.temp_structure.get('root_path')
+
+        # Clear the snil content cache to refresh it with new structure
+        if hasattr(self, '_snil_content_cache'):
+            self._snil_content_cache = {}
 
         # --- VALIDATION CHECK ---
         if not self.validator.validate_structure(self.temp_structure):
@@ -1460,3 +1526,88 @@ class SNILEditorWindow(QMainWindow):
             print("Rescanning dialogue files...")
             self.scan_dialog_files(self.root_path)
             print("Dialogue files rescanned and cache updated.")
+
+    def _init_window_geometry(self):
+        """Initialize window geometry settings."""
+        from PyQt5.QtCore import QSettings
+
+        # Use QSettings to store window geometry
+        self.settings = QSettings('SNIL_Editor', 'Window_Geometry')
+
+    def _restore_window_geometry(self):
+        """Restore window geometry from settings or center on screen."""
+        from PyQt5.QtWidgets import QDesktopWidget
+        from PyQt5.QtCore import QSettings
+
+        # Get saved geometry from settings
+        self.settings = QSettings('SNIL_Editor', 'Window_Geometry')
+
+        # Try to restore the saved geometry
+        saved_geometry = self.settings.value('window_geometry')
+        if saved_geometry:
+            self.restoreGeometry(saved_geometry)
+        else:
+            # If no saved geometry, center the window on the screen
+            self._center_window()
+
+        # Set minimum size
+        self.setMinimumSize(800, 600)
+
+    def _center_window(self):
+        """Center the window on the screen."""
+        from PyQt5.QtWidgets import QDesktopWidget
+
+        # Get the screen geometry
+        screen = QDesktopWidget().screenGeometry()
+
+        # Set window size (use a reasonable default if not set)
+        window_width = 1200
+        window_height = 800
+        self.resize(window_width, window_height)
+
+        # Calculate the center position
+        x = (screen.width() - window_width) // 2
+        y = (screen.height() - window_height) // 2
+
+        # Move the window to the center
+        self.move(x, y)
+
+    def closeEvent(self, event):
+        """
+        Intercepts the window close event.
+        First checks for unsaved changes, then saves the session and window geometry.
+        """
+        from PyQt5.QtCore import QSettings
+
+        # Save window geometry before closing
+        self.settings.setValue('window_geometry', self.saveGeometry())
+
+        # Check if there are tabs with unsaved changes
+        dirty_tab = next((t for t in self.open_tabs if t.is_dirty), None)
+
+        if dirty_tab:
+            reply = question_message_box(self, 'Unsaved Changes',
+                "You have unsaved changes. Do you want to save all files before quitting?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel)
+
+            if reply == QMessageBox.Save:
+                # Attempt to save all unsaved files
+                for tab in [t for t in self.open_tabs if t.is_dirty]:
+                    self.save_file_action(tab)
+
+                # If there are still unsaved changes after attempting to save (e.g., due to YAML syntax error), cancel close.
+                if any(t.is_dirty for t in self.open_tabs):
+                    event.ignore()
+                    return
+
+            elif reply == QMessageBox.Cancel:
+                event.ignore() # Cancel close
+                return
+
+        # Stop the file watcher before closing
+        self.stop_watching_dialogues()
+
+        # If closing is allowed (no unsaved changes or user pressed Discard/Save)
+        self.session_manager.save_session() # Save session state
+
+        event.accept()

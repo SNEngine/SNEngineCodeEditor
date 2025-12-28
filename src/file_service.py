@@ -34,3 +34,22 @@ class FileService:
         if os.path.isdir(folder_path):
             self.add_folder_recursive(folder_path, structure)
         return {'root_path': normalized_root, 'structure': structure}
+
+    def has_snil_files_recursive(self, folder_path: str) -> bool:
+        """Check if a folder or any of its subfolders contains .snil or .asset files (excluding .cs.snil files)."""
+        try:
+            # Limit the search depth to prevent long scans
+            for root, dirs, files in os.walk(folder_path):
+                # Limit depth to prevent long searches - only go 3 levels deep
+                if root[len(folder_path):].count(os.sep) > 3:  # Limit to 3 levels deep
+                    dirs[:] = []  # Don't recurse deeper
+                    continue
+
+                for file in files:
+                    # Include .snil and .asset files, but exclude .cs.snil files
+                    if file.lower().endswith(('.snil', '.asset')) and not file.lower().endswith('.cs.snil'):
+                        return True
+        except PermissionError:
+            # Skip folders we don't have permission to access
+            pass
+        return False

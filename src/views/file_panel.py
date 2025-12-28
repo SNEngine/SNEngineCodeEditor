@@ -123,6 +123,20 @@ def draw_folder_content(self, folder_path: str, structure: dict, level: int):
 
     should_be_open = self.get_or_set_foldout(normalized_path)
 
+    # Check if this folder has .snil files or subfolders with .snil files
+    # Use cached result if available
+    if not hasattr(self, '_snil_content_cache'):
+        self._snil_content_cache = {}
+
+    cache_key = normalized_path
+    if cache_key not in self._snil_content_cache:
+        self._snil_content_cache[cache_key] = _has_snil_content_in_structure(self, normalized_path, structure)
+
+    has_snil_content = self._snil_content_cache[cache_key]
+
+    # Only show folders that have .snil files or subfolders with .snil files (unless searching)
+    if not is_searching and not has_snil_content:
+        return
 
     # 1. Draw current folder/toggle button
     folder_color = self.STYLES['DarkTheme']['FolderColor']
@@ -150,6 +164,9 @@ def draw_folder_content(self, folder_path: str, structure: dict, level: int):
 
     if not is_searching or not folder_matches:
         folder_button.clicked.connect(lambda _, path=normalized_path, state=should_be_open: self.set_foldout(path, not state))
+        # Add context menu for right-click
+        folder_button.setContextMenuPolicy(Qt.CustomContextMenu)
+        folder_button.customContextMenuRequested.connect(lambda pos, path=folder_path: show_folder_context_menu(self, folder_button, pos, path))
 
     self.file_tree_layout.addWidget(folder_button)
 
@@ -169,8 +186,106 @@ def draw_folder_content(self, folder_path: str, structure: dict, level: int):
                        if k.startswith(path_prefix) and
                        self.file_service.normalize_path(os.path.dirname(k)) == normalized_path]
 
+        # Filter subfolders to only show those with .snil content
+        filtered_sub_folders = []
         for sub_folder_path in sorted(sub_folders):
+            cache_key = self.file_service.normalize_path(sub_folder_path)
+            if cache_key not in self._snil_content_cache:
+                self._snil_content_cache[cache_key] = _has_snil_content_in_structure(self, sub_folder_path, structure)
+
+            if is_searching or self._snil_content_cache[cache_key]:
+                filtered_sub_folders.append(sub_folder_path)
+
+        for sub_folder_path in filtered_sub_folders:
             self.draw_folder_content(sub_folder_path, structure, level + 1)
+
+
+def _has_snil_content_in_structure(self, folder_path, structure):
+    """Check if a folder has .snil/.asset files directly in it (excluding .cs.snil files)."""
+    normalized_path = self.file_service.normalize_path(folder_path)
+
+    # Check if this folder has .snil/.asset files directly (excluding .cs.snil files)
+    files_in_folder = structure.get(normalized_path, [])
+    return any(file.lower().endswith(('.snil', '.asset')) and not file.lower().endswith('.cs.snil') for file in files_in_folder)
+
+
+def show_folder_context_menu(self, button, pos, folder_path):
+    """Show context menu for folder operations"""
+    from PyQt5.QtWidgets import QMenu, QAction, QLineEdit, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QCursor
+
+    menu = QMenu()
+
+    # New Folder action
+    new_folder_action = QAction("New Folder", self)
+    new_folder_action.triggered.connect(lambda: create_new_folder(self, folder_path))
+    menu.addAction(new_folder_action)
+
+    # Show the menu at the cursor position
+    menu.exec_(QCursor.pos())
+
+
+def create_new_folder(self, parent_folder_path):
+    """Create a new folder with user input for the name"""
+    from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QColor
+
+    # Create a dialog for folder name input
+    dialog = QDialog(self)
+    dialog.setWindowTitle("Create New Folder")
+    dialog.setModal(True)
+
+    layout = QVBoxLayout()
+
+    # Input field
+    label = QLabel("Enter folder name:")
+    layout.addWidget(label)
+
+    name_input = QLineEdit()
+    name_input.setPlaceholderText("Folder name...")
+    layout.addWidget(name_input)
+
+    # Buttons
+    button_layout = QHBoxLayout()
+
+    ok_button = QPushButton("Create")
+    cancel_button = QPushButton("Cancel")
+
+    button_layout.addWidget(ok_button)
+    button_layout.addWidget(cancel_button)
+
+    layout.addLayout(button_layout)
+
+    dialog.setLayout(layout)
+
+    # Connect buttons
+    ok_button.clicked.connect(dialog.accept)
+    cancel_button.clicked.connect(dialog.reject)
+
+    # Handle dialog result
+    if dialog.exec_() == QDialog.Accepted:
+        folder_name = name_input.text().strip()
+        if folder_name:
+            # Validate folder name (basic validation)
+            invalid_chars = '<>:"/\\|?*'
+            if any(char in invalid_chars for char in folder_name):
+                QMessageBox.warning(self, "Invalid Folder Name", f"Folder name cannot contain these characters: {invalid_chars}")
+                return
+
+            new_folder_path = os.path.join(parent_folder_path, folder_name)
+
+            try:
+                os.makedirs(new_folder_path, exist_ok=True)
+                # Refresh the file structure to show the new folder
+                self.reload_structure(self.root_path)
+                self.show_notification(f"Folder '{folder_name}' created successfully",
+                                     QColor(self.STYLES['DarkTheme']['NotificationSuccess']))
+            except Exception as e:
+                QMessageBox.critical(self, "Error Creating Folder", f"Could not create folder: {str(e)}")
+        else:
+            QMessageBox.warning(self, "Invalid Folder Name", "Please enter a valid folder name.")
 
 
 def _add_file_button(self, name: str, path: str, level: int):

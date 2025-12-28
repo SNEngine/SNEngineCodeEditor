@@ -10,6 +10,8 @@ DarkTheme:
   DialogueMapHoverBorderColor: '#6A6A6A'
   EditorBackground: '#1F1F1F'
   EditorCloseButtonColor: '#E8E8E8'
+  EditorDefaultFontSize: 14
+  EditorFontName: Consolas
   FilePanelBackground: '#181818'
   FilePanelHover: '#2D2D2D'
   FolderColor: '#E06C75'
@@ -39,10 +41,10 @@ DarkTheme:
   ScrollbarWidth: 10
   SecondaryBackground: '#2A2A2A'
   StatusDefault: '#999999'
-  SyntaxCommentColor: '#ffff7f'
+  SyntaxCommentColor: '#608B4E'
   SyntaxDefaultColor: '#CCCCCC'
   SyntaxKeyColor: '#E06C75'
   SyntaxKeywordColor: '#FFB86C'
-  SyntaxParameterColor: '#FFD700'
+  SyntaxParameterColor: '#555500'
   SyntaxStringColor: '#ABB2BF'
   YamlFileIconColor: '#CCCCCC'
